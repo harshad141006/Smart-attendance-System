@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Card, CardContent, Typography, TextField, Button, Grid, MenuItem, Alert, CircularProgress, Switch, FormControlLabel, Divider } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, useGeolocation } from '../../hooks';
 import { facultyService, subjectService } from '../../services';
 import { MyLocation, PlayArrow } from '@mui/icons-material';
 
 const CreateSession = () => {
   const navigate = useNavigate();
+  const locationState = useLocation();
   const { user } = useAuth();
   
   // Geolocation hook
@@ -19,9 +20,11 @@ const CreateSession = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   
+  const prefill = locationState.state?.prefill || null;
+  
   const [form, setForm] = useState({
-    subject_id: '',
-    session_title: '',
+    subject_id: prefill?.subject_id || '',
+    session_title: prefill?.title || '',
     duration_minutes: 15,
     latitude: 28.7041,  // Default fallback coords
     longitude: 77.1025,
@@ -36,7 +39,8 @@ const CreateSession = () => {
         // We fetch subjects. Usually, subjects are queried by faculty ID.
         // For testing/mocking, if there is no faculty_id record, we list all subjects.
         const subRes = await subjectService.list();
-        setSubjects(subRes.data || []);
+        const data = subRes.data;
+        setSubjects(Array.isArray(data) ? data : (data?.subjects || []));
       } catch (err) {
         console.error(err);
         setErrorMsg('Failed to load subjects.');

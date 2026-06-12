@@ -9,6 +9,7 @@ from app.core.database import get_database
 from app.api.routes.auth import get_current_user
 from app.schemas.schemas import RoleEnum, ODRequestUpdate
 from app.services.attendance.attendance_service import AttendanceService
+from app.schemas.schemas import AnnouncementCreate, AnnouncementResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/advisors", tags=["Advisors"])
@@ -361,4 +362,70 @@ async def send_warning_notification(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to send warning notification"
+        )
+
+
+@router.post("/announcements", response_model=Dict[str, Any])
+async def post_announcement(
+    payload: AnnouncementCreate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database)
+):
+    """Post a general announcement to a batch"""
+    try:
+        if current_user.get("role") != RoleEnum.ADVISOR:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only advisors can post announcements"
+            )
+
+        announcement = {
+            "advisor_id": current_user["id"],
+            "advisor_name": f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip(),
+            "batch": payload.batch,
+            "department": payload.department,
+            "section": payload.section,
+            "message": payload.message,
+            "created_at": datetime.utcnow()
+        }
+
+        result = await db["announcements"].insert_one(announcement)
+        
+        return {
+            "message": "Announcement posted successfully",
+            "announcement_id": str(result.inserted_id)
+        }
+    except Exception as e:
+        logger.error(f"Post announcement error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to post announcement"
+        )
+
+
+@router.get("/announcements", response_model=List[AnnouncementResponse])
+async def get_advisor_announcements(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database)
+):
+    """Get past announcements posted by this advisor"""
+    try:
+        if current_user.get("role") != RoleEnum.ADVISOR:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only advisors can view these announcements"
+            )
+
+        announcements = await db["announcements"].find({"advisor_id": current_user["id"]}).sort("created_at", -1).to_list(None)
+        
+        for a in announcements:
+            a["id"] = str(a["_id"])
+            a["_id"] = str(a["_id"])
+            
+        return announcements
+    except Exception as e:
+        logger.error(f"Get announcements error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve announcements"
         )

@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Box, Grid, Card, CardContent, Typography, Button, CircularProgress, List, ListItem, ListItemText, Divider, Alert } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks';
-import { studentService, notificationService } from '../../services';
-import { BarChart, Person, CameraAlt, NotificationsActive } from '@mui/icons-material';
+import { studentService, notificationService, timetableService } from '../../services';
+import { BarChart, Person, CameraAlt, NotificationsActive, Campaign, School, LocalCafe, AccessTime } from '@mui/icons-material';
 
 const StudentDashboard = () => {
   const navigate = useNavigate();
@@ -12,6 +12,8 @@ const StudentDashboard = () => {
   const [stats, setStats] = useState({ percentage: 0, status: 'warning' });
   const [history, setHistory] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [todayTimetable, setTodayTimetable] = useState(null);
+  const [announcements, setAnnouncements] = useState([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -30,13 +32,18 @@ const StudentDashboard = () => {
         const historyRes = await studentService.getAttendanceHistory();
         setHistory((historyRes.data.records || historyRes.data.attendance_records || []).slice(0, 5));
 
-        // Fetch notifications
+        // Fetch notifications, timetable, and announcements
         try {
-          const notifRes = await notificationService.list();
-          setNotifications((notifRes.data || []).slice(0, 4));
-        } catch (notifErr) {
-          console.error('Failed to fetch notifications:', notifErr);
-          setNotifications([]);
+          const [notifRes, timeRes, annRes] = await Promise.all([
+            notificationService.list().catch(() => ({ data: [] })),
+            timetableService.getTodayTimetable().catch(() => ({ data: null })),
+            studentService.getAnnouncements().catch(() => ({ data: [] }))
+          ]);
+          setNotifications(Array.isArray(notifRes.data) ? notifRes.data.slice(0, 4) : []);
+          setTodayTimetable(timeRes.data || null);
+          setAnnouncements(Array.isArray(annRes.data) ? annRes.data.slice(0, 3) : []);
+        } catch (fetchErr) {
+          console.error('Failed to fetch additional data:', fetchErr);
         }
       } catch (err) {
         console.error(err);
@@ -242,6 +249,78 @@ const StudentDashboard = () => {
                         />
                       </ListItem>
                       {index < notifications.length - 1 && <Divider />}
+                    </React.Fragment>
+                  ))}
+                </List>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Today's Timetable */}
+        <Grid item xs={12} md={8}>
+          <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.05)', height: '100%', overflow: 'hidden' }}>
+            <Box sx={{ p: 2, bgcolor: 'primary.main', color: 'white' }}>
+              <Typography variant="h6" fontWeight="bold">
+                Today's Timetable ({todayTimetable?.day_of_week || 'N/A'})
+              </Typography>
+            </Box>
+            <CardContent sx={{ p: 3, maxHeight: '300px', overflowY: 'auto' }}>
+              {(!todayTimetable?.periods || todayTimetable.periods.length === 0) ? (
+                <Typography color="textSecondary">No classes scheduled for today.</Typography>
+              ) : (
+                [...todayTimetable.periods].sort((a, b) => a.start_time.localeCompare(b.start_time)).map((p, pIdx) => (
+                  <Box 
+                    key={pIdx} 
+                    sx={{ 
+                      p: 2, mb: 2, 
+                      bgcolor: p.is_break ? '#fffaf0' : '#f8fafc',
+                      borderLeft: `4px solid ${p.is_break ? '#ed8936' : '#667eea'}`,
+                      borderRadius: '8px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Box>
+                      <Typography variant="subtitle2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {p.is_break ? <LocalCafe fontSize="small" color="secondary" /> : <School fontSize="small" color="primary" />}
+                        {p.is_break ? p.title : `Lecture ${pIdx + 1}`}
+                      </Typography>
+                      <Typography variant="body2" color="textSecondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                        <AccessTime fontSize="small" sx={{ fontSize: 16 }} /> {p.start_time} - {p.end_time}
+                      </Typography>
+                    </Box>
+                  </Box>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Advisor Announcements */}
+        <Grid item xs={12} md={4}>
+          <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.05)', height: '100%' }}>
+            <CardContent sx={{ p: 4 }}>
+              <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 3, display: 'flex', alignItems: 'center' }}>
+                <Campaign sx={{ color: '#ed8936', mr: 1 }} />
+                Advisor Announcements
+              </Typography>
+              {announcements.length === 0 ? (
+                <Typography color="textSecondary">No new announcements from your advisor.</Typography>
+              ) : (
+                <List>
+                  {announcements.map((ann, index) => (
+                    <React.Fragment key={ann.id || index}>
+                      <ListItem sx={{ px: 0, py: 1, alignItems: 'flex-start', flexDirection: 'column' }}>
+                        <Typography variant="body2" sx={{ fontWeight: '500', mb: 0.5 }}>
+                          {ann.message}
+                        </Typography>
+                        <Typography variant="caption" color="textSecondary">
+                          {new Date(ann.created_at).toLocaleString()}
+                        </Typography>
+                      </ListItem>
+                      {index < announcements.length - 1 && <Divider />}
                     </React.Fragment>
                   ))}
                 </List>

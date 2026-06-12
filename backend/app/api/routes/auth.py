@@ -67,7 +67,8 @@ async def register(
             last_name=user.last_name,
             role=user.role,
             hotspot_ssid=user.hotspot_ssid,
-            hotspot_bssid=user.hotspot_bssid
+            hotspot_bssid=user.hotspot_bssid,
+            assigned_subjects=user.assigned_subjects
         )
         
         if not user_id:

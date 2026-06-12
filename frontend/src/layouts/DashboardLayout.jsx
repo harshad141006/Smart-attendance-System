@@ -21,18 +21,18 @@ import {
   People,
   Assignment,
   BarChart,
-  Videocam,
 } from '@mui/icons-material';
 import { useAuth } from '../hooks';
+import InstallPrompt from '../components/InstallPrompt';
 
 const DRAWER_WIDTH = 240;
 
 const menuItems = {
   student: [
     { label: 'Dashboard', path: '/student/dashboard', icon: Dashboard },
+    { label: 'My Timetable', path: '/student/timetable', icon: Assignment },
     { label: 'Register Face', path: '/student/register-face', icon: Assignment },
     { label: 'Mark Attendance', path: '/student/attendance', icon: Assignment },
-    { label: 'Video Face Verification', path: '/student/face-detect-video', icon: Videocam },
     { label: 'Attendance History', path: '/student/history', icon: BarChart },
     { label: 'Profile', path: '/student/profile', icon: Settings },
   ],
@@ -44,6 +44,7 @@ const menuItems = {
   ],
   advisor: [
     { label: 'Dashboard', path: '/advisor/dashboard', icon: Dashboard },
+    { label: 'Manage Timetable', path: '/advisor/timetable', icon: Assignment },
     { label: 'Student Analytics', path: '/advisor/analytics', icon: BarChart },
     { label: 'Shortage Reports', path: '/advisor/shortage-reports', icon: Assignment },
   ],
@@ -157,11 +158,12 @@ const DashboardLayout = () => {
           flexGrow: 1,
           p: 3,
           mt: 8,
-          ml: `${DRAWER_WIDTH}px`,
+          ml: { xs: 0, sm: `${DRAWER_WIDTH}px` },
         }}
       >
         <Outlet />
       </Box>
+      <InstallPrompt />
     </Box>
   );
 };

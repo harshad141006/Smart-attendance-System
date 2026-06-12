@@ -9,7 +9,7 @@ from datetime import datetime
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.cache.redis_cache import cache
 from app.core.config import settings
-from app.api.routes import auth, students, faculty, users, advisors, departments, subjects, reports, notifications, attendance
+from app.api.routes import auth, students, faculty, users, advisors, departments, subjects, reports, notifications, attendance, timetable
 from app.utils.logger import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(reports.router)
     app.include_router(notifications.router)
     app.include_router(attendance.router)
+    app.include_router(timetable.router)
     
     # Health check endpoint
     @app.get("/health")

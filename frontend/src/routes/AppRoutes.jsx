@@ -18,8 +18,8 @@ const StudentHistory = lazy(() => import('../pages/Student/History'));
 const StudentProfile = lazy(() => import('../pages/Student/Profile'));
 const FaceRegistration = lazy(() => import('../pages/Student/FaceRegistration'));
 const FaceDetectionTest = lazy(() => import('../pages/Student/FaceDetectionTest'));
-const FaceVideoDetection = lazy(() => import('../pages/Student/FaceVideoDetection'));
 const StudentNotifications = lazy(() => import('../pages/Student/Notifications'));
+const StudentTimetable = lazy(() => import('../pages/Student/Timetable'));
 
 // Faculty Pages
 const FacultyDashboard = lazy(() => import('../pages/Faculty/Dashboard'));
@@ -31,6 +31,7 @@ const FacultyReports = lazy(() => import('../pages/Faculty/Reports'));
 const AdvisorDashboard = lazy(() => import('../pages/Advisor/Dashboard'));
 const StudentAnalytics = lazy(() => import('../pages/Advisor/StudentAnalytics'));
 const ShortageReports = lazy(() => import('../pages/Advisor/ShortageReports'));
+const TimetableManager = lazy(() => import('../pages/Advisor/TimetableManager'));
 
 // Admin Pages
 const AdminDashboard = lazy(() => import('../pages/Admin/Dashboard'));
@@ -71,13 +72,13 @@ export const AppRoutes = () => {
           
           {/* Student Routes */}
           <Route path="/student/dashboard" element={<ProtectedRoute requiredRole="student"><StudentDashboard /></ProtectedRoute>} />
+          <Route path="/student/timetable" element={<ProtectedRoute requiredRole="student"><StudentTimetable /></ProtectedRoute>} />
           <Route path="/student/register-face" element={<ProtectedRoute requiredRole="student"><FaceRegistration /></ProtectedRoute>} />
           <Route path="/student/attendance" element={<ProtectedRoute requiredRole="student"><StudentAttendance /></ProtectedRoute>} />
           <Route path="/student/history" element={<ProtectedRoute requiredRole="student"><StudentHistory /></ProtectedRoute>} />
           <Route path="/student/profile" element={<ProtectedRoute requiredRole="student"><StudentProfile /></ProtectedRoute>} />
           <Route path="/student/notifications" element={<ProtectedRoute requiredRole="student"><StudentNotifications /></ProtectedRoute>} />
           <Route path="/student/face-detect-test" element={<ProtectedRoute requiredRole="student"><FaceDetectionTest /></ProtectedRoute>} />
-          <Route path="/student/face-detect-video" element={<ProtectedRoute requiredRole="student"><FaceVideoDetection /></ProtectedRoute>} />
 
           {/* Faculty Routes */}
           <Route path="/faculty/dashboard" element={<ProtectedRoute requiredRole="faculty"><FacultyDashboard /></ProtectedRoute>} />
@@ -87,6 +88,7 @@ export const AppRoutes = () => {
 
           {/* Advisor Routes */}
           <Route path="/advisor/dashboard" element={<ProtectedRoute requiredRole="advisor"><AdvisorDashboard /></ProtectedRoute>} />
+          <Route path="/advisor/timetable" element={<ProtectedRoute requiredRole="advisor"><TimetableManager /></ProtectedRoute>} />
           <Route path="/advisor/analytics" element={<ProtectedRoute requiredRole="advisor"><StudentAnalytics /></ProtectedRoute>} />
           <Route path="/advisor/shortage-reports" element={<ProtectedRoute requiredRole="advisor"><ShortageReports /></ProtectedRoute>} />
 

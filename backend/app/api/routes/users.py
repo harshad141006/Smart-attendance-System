@@ -19,10 +19,10 @@ async def list_users(
 ):
     """List all users (Admin only)"""
     try:
-        if current_user.get("role") != RoleEnum.ADMIN:
+        if current_user.get("role") not in [RoleEnum.ADMIN, RoleEnum.ADVISOR]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only administrators can list all users"
+                detail="Only administrators and advisors can list users"
             )
             
         users = await db["users"].find().to_list(None)

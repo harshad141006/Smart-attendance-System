@@ -20,13 +20,15 @@ export const studentService = {
     api.post('/students/register-face', { image_data: Array.isArray(imageDatas) ? imageDatas : [imageDatas] }),
   getAttendanceHistory: () => api.get('/students/attendance-history'),
   getAttendancePercentage: () => api.get('/students/attendance-percentage'),
-  markAttendance: (sessionId, imageData, latitude, longitude, wifiBssid) =>
+  markAttendance: (sessionId, imageData, latitude, longitude, wifiBssid, wifiRssi = null, hotspotOnly = false) =>
     api.post('/students/mark-attendance', {
       session_id: sessionId,
       image_data: imageData,
       latitude,
       longitude,
       wifi_bssid: wifiBssid,
+      wifi_rssi: wifiRssi,
+      hotspot_only: hotspotOnly,
     }),
   submitODRequest: (sessionId, reason, docUrl = null) =>
     api.post('/students/od-request', {
@@ -43,6 +45,7 @@ export const studentService = {
       },
     });
   },
+  getAnnouncements: () => api.get('/students/announcements'),
 };
 
 export const facultyService = {
@@ -79,19 +82,22 @@ export const advisorService = {
     api.post(`/advisors/od-requests/${id}/approve`, { status, comment }),
   sendWarning: (studentId, message) =>
     api.post('/advisors/send-warning', { student_id: studentId, message }),
+  postAnnouncement: (batch, department, section, message) => 
+    api.post('/advisors/announcements', { batch, department, section, message }),
+  getAnnouncements: () => api.get('/advisors/announcements'),
 };
 
 export const departmentService = {
-  create: (data) => api.post('/departments', data),
-  list: () => api.get('/departments'),
+  create: (data) => api.post('/departments/', data),
+  list: () => api.get('/departments/'),
   get: (id) => api.get(`/departments/${id}`),
   update: (id, data) => api.put(`/departments/${id}`, data),
   delete: (id) => api.delete(`/departments/${id}`),
 };
 
 export const subjectService = {
-  create: (data) => api.post('/subjects', data),
-  list: () => api.get('/subjects'),
+  create: (data) => api.post('/subjects/', data),
+  list: () => api.get('/subjects/'),
   getByFaculty: (facultyId) => api.get(`/subjects/faculty/${facultyId}`),
   update: (id, data) => api.put(`/subjects/${id}`, data),
   delete: (id) => api.delete(`/subjects/${id}`),
@@ -121,5 +127,14 @@ export const attendanceService = {
   addWiFiBSSID: (bssid, type = 'college') =>
     api.post('/attendance/wifi-config', { bssid, bssid_type: type }),
   getGeofenceConfig: () => api.get('/attendance/geofence-config'),
+};
+
+export const timetableService = {
+  saveTimetable: (data) => api.post('/timetable/', data),
+  getStudentTimetable: () => api.get('/timetable/student'),
+  getFacultyTimetable: () => api.get('/timetable/faculty'),
+  getTimetable: (batch, department, section, day_of_week) => 
+    api.get('/timetable/search', { params: { batch, department, section, day_of_week } }),
+  getTodayTimetable: () => api.get('/timetable/today'),
 };
 

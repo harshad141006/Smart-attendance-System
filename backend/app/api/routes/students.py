@@ -10,7 +10,8 @@ from app.core.database import get_database
 from app.api.routes.auth import get_current_user
 from app.services.auth.auth_service import AuthService
 from app.services.attendance.attendance_service import AttendanceService
-from app.schemas.schemas import RoleEnum
+from app.services.attendance.attendance_service import AttendanceService
+from app.schemas.schemas import RoleEnum, AnnouncementResponse
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,9 +24,10 @@ class FaceRegisterRequest(BaseModel):
 
 class MarkAttendanceRequest(BaseModel):
     session_id: str
-    image_data: str
+    image_data: Optional[str] = None
     wifi_bssid: str
-
+    wifi_rssi: Optional[int] = None
+    hotspot_only: Optional[bool] = False
 
 class ODRequestPayload(BaseModel):
     session_id: str
@@ -204,41 +206,51 @@ async def mark_attendance(
                 detail="Student record not found"
             )
         
-        # Verify face
-        from app.services.face_recognition.registration_service import FaceRegistrationService
-        from app.services.face_recognition.verification_service import FaceVerificationService
-        from app.services.face_recognition.embedding_service import FaceEmbeddingService
-        import numpy as np
-        
-        embedding_service = FaceEmbeddingService()
-        registration_service = FaceRegistrationService(db, embedding_service)
-        verification_service = FaceVerificationService()
-        
-        registered_emb = await registration_service.get_latest_embedding(str(student["_id"]))
-        if not registered_emb:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Face not registered. Please register your face first."
-            )
-        
-        # Preprocess and extract current embedding
-        face_tensor = embedding_service.preprocess_image(payload.image_data, strict_detection=True)
-        if face_tensor is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No face detected or failed to process webcam capture image"
-            )
-        
-        current_embedding = embedding_service.extract_embedding(face_tensor)
-        registered_embedding = np.array(registered_emb["embedding"])
-        
-        is_verified, confidence = verification_service.verify_face(registered_embedding, current_embedding)
-        
-        if not is_verified:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Face verification failed. Please try again in better lighting."
-            )
+        # Verify face if not hotspot only
+        if not payload.hotspot_only:
+            from app.services.face_recognition.registration_service import FaceRegistrationService
+            from app.services.face_recognition.verification_service import FaceVerificationService
+            from app.services.face_recognition.embedding_service import FaceEmbeddingService
+            import numpy as np
+            
+            embedding_service = FaceEmbeddingService()
+            registration_service = FaceRegistrationService(db, embedding_service)
+            verification_service = FaceVerificationService()
+            
+            registered_emb = await registration_service.get_latest_embedding(str(student["_id"]))
+            if not registered_emb:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Face not registered. Please register your face first."
+                )
+            
+            if not payload.image_data:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Image data is required for face verification."
+                )
+            
+            # Preprocess and extract current embedding
+            face_tensor = embedding_service.preprocess_image(payload.image_data, strict_detection=True)
+            if face_tensor is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No face detected or failed to process webcam capture image"
+                )
+            
+            current_embedding = embedding_service.extract_embedding(face_tensor)
+            registered_embedding = np.array(registered_emb["embedding"])
+            
+            is_verified, confidence = verification_service.verify_face(registered_embedding, current_embedding)
+            
+            if not is_verified:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Face verification failed. Please try again in better lighting."
+                )
+        else:
+            confidence = 1.0
+            is_verified = False
         
         # Mark attendance
         attendance_service = AttendanceService(db)
@@ -246,7 +258,9 @@ async def mark_attendance(
             payload.session_id,
             str(student["_id"]),
             payload.wifi_bssid,
-            confidence
+            confidence,
+            wifi_rssi=payload.wifi_rssi,
+            hotspot_only=payload.hotspot_only
         )
         
         if not success:
@@ -454,3 +468,50 @@ async def detect_faces_video(
                 verified = is_verified
 
     return {"results": results, "best_frame_index": best_idx, "verified": verified}
+
+
+@router.get("/announcements", response_model=List[AnnouncementResponse])
+async def get_student_announcements(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database)
+):
+    """Get announcements for the student's batch"""
+    try:
+        if current_user.get("role") != RoleEnum.STUDENT:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only students can view these announcements"
+            )
+
+        student = await db["students"].find_one({"user_id": current_user["id"]})
+        if not student:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Student record not found"
+            )
+
+        query = {
+            "batch": student["batch"],
+            "department": student["department"]
+        }
+        if student.get("section"):
+            # If section exists, optionally match by section as well.
+            # Announcements could be batch-wide without section, or section-specific.
+            # But based on our schema, section is required for AnnouncementCreate. Let's exact match it.
+            query["section"] = student["section"]
+
+        announcements = await db["announcements"].find(query).sort("created_at", -1).to_list(None)
+        
+        for a in announcements:
+            a["id"] = str(a["_id"])
+            a["_id"] = str(a["_id"])
+            
+        return announcements
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get student announcements error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve announcements"
+        )

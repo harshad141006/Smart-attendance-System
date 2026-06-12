@@ -1,14 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Card, CardContent, Typography, Grid, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Alert } from '@mui/material';
-import { advisorService, facultyService } from '../../services';
-import { BarChart, People, AssignmentTurnedIn, LocalActivity, Wifi } from '@mui/icons-material';
+import { Box, Card, CardContent, Typography, Grid, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Alert, Paper, Chip } from '@mui/material';
+import { advisorService, facultyService, timetableService } from '../../services';
+import { BarChart, People, AssignmentTurnedIn, LocalActivity, Wifi, Campaign, Send, School, LocalCafe, AccessTime } from '@mui/icons-material';
+import { useAuth } from '../../hooks/useAuth';
 
 const AdvisorDashboard = () => {
   const [analytics, setAnalytics] = useState({ overall_attendance_average: 0, total_students: 0, shortage_count: 0 });
   const [odRequests, setOdRequests] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [todayTimetable, setTodayTimetable] = useState(null);
+  const [newAnnouncement, setNewAnnouncement] = useState('');
+  const [postingAnnouncement, setPostingAnnouncement] = useState(false);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const { user } = useAuth();
 
   // Approval Dialog controls
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -30,8 +36,14 @@ const AdvisorDashboard = () => {
       const analyticsRes = await advisorService.getAnalytics();
       setAnalytics(analyticsRes.data);
 
-      const odRes = await advisorService.getODRequests();
-      setOdRequests(odRes.data || []);
+      const [odRes, annRes, timeRes] = await Promise.all([
+        advisorService.getODRequests().catch(() => ({ data: [] })),
+        advisorService.getAnnouncements().catch(() => ({ data: [] })),
+        timetableService.getTodayTimetable().catch(() => ({ data: null }))
+      ]);
+      setOdRequests(Array.isArray(odRes.data) ? odRes.data : []);
+      setAnnouncements(Array.isArray(annRes.data) ? annRes.data : []);
+      setTodayTimetable(timeRes.data || null);
     } catch (err) {
       console.error(err);
       setErrorMsg('Failed to load advisor dashboard data.');
@@ -93,6 +105,29 @@ const AdvisorDashboard = () => {
       setErrorMsg(err.response?.data?.detail || 'Failed to update faculty hotspot config.');
     } finally {
       setHotspotSubmitting(false);
+    }
+  };
+
+  const handlePostAnnouncement = async () => {
+    if (!newAnnouncement.trim()) return;
+    setPostingAnnouncement(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      await advisorService.postAnnouncement(
+        user.assigned_batch,
+        user.assigned_department,
+        user.assigned_section || "A",
+        newAnnouncement
+      );
+      setSuccessMsg('Announcement posted successfully!');
+      setNewAnnouncement('');
+      loadDashboardData();
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('Failed to post announcement.');
+    } finally {
+      setPostingAnnouncement(false);
     }
   };
 
@@ -167,64 +202,147 @@ const AdvisorDashboard = () => {
         </Grid>
       </Grid>
 
-      {/* Pending OD requests */}
-      <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+      <Grid container spacing={4} sx={{ mb: 4 }}>
+        <Grid item xs={12} md={7}>
+          {/* Pending OD requests */}
+          <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.04)', overflow: 'hidden', height: '100%' }}>
+            <CardContent sx={{ p: 4 }}>
+              <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 3, display: 'flex', alignItems: 'center' }}>
+                <LocalActivity sx={{ mr: 1, color: 'primary.main' }} />
+                Pending On Duty (OD) Requests
+              </Typography>
+              {odRequests.length === 0 ? (
+                <Typography color="textSecondary">No pending OD requests found for your batch.</Typography>
+              ) : (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Name</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Enrollment</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {odRequests.map((req) => (
+                        <TableRow key={req.id || req._id} sx={{ '&:hover': { bgcolor: '#f7fafc' } }}>
+                          <TableCell sx={{ fontWeight: '500' }}>{req.student_name}</TableCell>
+                          <TableCell sx={{ fontFamily: 'monospace' }}>{req.enrollment_number}</TableCell>
+                          <TableCell align="center">
+                            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
+                              <Button
+                                variant="contained" color="success" size="small"
+                                onClick={() => handleOpenApproval(req, 'approved')}
+                                sx={{ textTransform: 'none', borderRadius: '6px', minWidth: '40px', px: 1 }}
+                              >
+                                ✓
+                              </Button>
+                              <Button
+                                variant="outlined" color="error" size="small"
+                                onClick={() => handleOpenApproval(req, 'rejected')}
+                                sx={{ textTransform: 'none', borderRadius: '6px', minWidth: '40px', px: 1 }}
+                              >
+                                ✕
+                              </Button>
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={5}>
+          {/* Today's Timetable */}
+          <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.04)', overflow: 'hidden', height: '100%' }}>
+            <Box sx={{ p: 2, bgcolor: 'primary.main', color: 'white' }}>
+              <Typography variant="h6" fontWeight="bold">
+                Today's Timetable ({todayTimetable?.day_of_week || 'N/A'})
+              </Typography>
+            </Box>
+            <CardContent sx={{ p: 3, maxHeight: '300px', overflowY: 'auto' }}>
+              {(!todayTimetable?.periods || todayTimetable.periods.length === 0) ? (
+                <Typography color="textSecondary">No classes scheduled for today.</Typography>
+              ) : (
+                [...todayTimetable.periods].sort((a, b) => a.start_time.localeCompare(b.start_time)).map((p, pIdx) => (
+                  <Paper 
+                    key={pIdx} 
+                    elevation={0}
+                    sx={{ 
+                      p: 2, mb: 2, 
+                      bgcolor: p.is_break ? '#fffaf0' : '#f8fafc',
+                      borderLeft: `4px solid ${p.is_break ? '#ed8936' : '#667eea'}`,
+                      borderRadius: '8px'
+                    }}
+                  >
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography variant="subtitle2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {p.is_break ? <LocalCafe fontSize="small" color="secondary" /> : <School fontSize="small" color="primary" />}
+                          {p.is_break ? p.title : `Lecture ${pIdx + 1}`}
+                        </Typography>
+                        <Typography variant="body2" color="textSecondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                          <AccessTime fontSize="small" sx={{ fontSize: 16 }} /> {p.start_time} - {p.end_time}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Paper>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
+      {/* Announcements Section */}
+      <Card sx={{ mb: 4, borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 3, display: 'flex', alignItems: 'center' }}>
-            <LocalActivity sx={{ mr: 1, color: 'primary.main' }} />
-            Pending On Duty (OD) Requests
+            <Campaign sx={{ mr: 1, color: '#ed8936' }} />
+            General Announcements
           </Typography>
+          <Typography color="textSecondary" sx={{ mb: 3 }}>
+            Post a general message to all students in your batch. They will see this on their dashboard.
+          </Typography>
+          
+          <Box display="flex" gap={2} mb={4}>
+            <TextField
+              fullWidth
+              variant="outlined"
+              placeholder="Type your announcement here..."
+              value={newAnnouncement}
+              onChange={(e) => setNewAnnouncement(e.target.value)}
+              multiline
+              rows={2}
+            />
+            <Button
+              variant="contained"
+              color="primary"
+              disabled={postingAnnouncement || !newAnnouncement.trim()}
+              onClick={handlePostAnnouncement}
+              sx={{ px: 4, borderRadius: '8px' }}
+              endIcon={<Send />}
+            >
+              Post
+            </Button>
+          </Box>
 
-          {odRequests.length === 0 ? (
-            <Typography color="textSecondary">No pending OD requests found for your batch.</Typography>
-          ) : (
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Student Name</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Enrollment Number</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Session Topic</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Reason for OD</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Requested On</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {odRequests.map((req) => (
-                    <TableRow key={req.id || req._id} sx={{ '&:hover': { bgcolor: '#f7fafc' } }}>
-                      <TableCell sx={{ fontWeight: '500' }}>{req.student_name}</TableCell>
-                      <TableCell sx={{ fontFamily: 'monospace' }}>{req.enrollment_number}</TableCell>
-                      <TableCell>{req.session_title}</TableCell>
-                      <TableCell>{req.reason}</TableCell>
-                      <TableCell>{new Date(req.requested_at).toLocaleDateString()}</TableCell>
-                      <TableCell align="center">
-                        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
-                          <Button
-                            variant="contained"
-                            color="success"
-                            size="small"
-                            onClick={() => handleOpenApproval(req, 'approved')}
-                            sx={{ textTransform: 'none', borderRadius: '6px' }}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            variant="outlined"
-                            color="error"
-                            size="small"
-                            onClick={() => handleOpenApproval(req, 'rejected')}
-                            sx={{ textTransform: 'none', borderRadius: '6px' }}
-                          >
-                            Reject
-                          </Button>
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
+          {announcements.length > 0 && (
+            <Box>
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 2 }}>Recent Announcements</Typography>
+              {announcements.map((ann, idx) => (
+                <Paper key={ann.id || idx} elevation={0} sx={{ p: 2, mb: 2, bgcolor: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #ed8936' }}>
+                  <Typography variant="body1">{ann.message}</Typography>
+                  <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>
+                    Posted on {new Date(ann.created_at).toLocaleString()}
+                  </Typography>
+                </Paper>
+              ))}
+            </Box>
           )}
         </CardContent>
       </Card>

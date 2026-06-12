@@ -286,7 +286,9 @@ class AttendanceService:
         student_id: str,
         wifi_bssid: str,
         face_confidence: float,
-        status: str = "present"
+        wifi_rssi: Optional[int] = None,
+        status: str = "present",
+        hotspot_only: bool = False
     ) -> Tuple[bool, str]:
         """
         Mark attendance with validation
@@ -313,16 +315,34 @@ class AttendanceService:
                 return False, "Attendance already marked for this session"
             
             
-            # WiFi validation
-            wifi_verified, _ = await self.wifi_validation.verify_wifi_bssid(wifi_bssid)
-            if not wifi_verified:
-                if session.get("allow_faculty_hotspot"):
-                    faculty = await self.db["faculty"].find_one({"_id": ObjectId(session["faculty_id"])})
-                    if faculty and faculty.get("hotspot_bssid") == wifi_bssid:
-                        wifi_verified = True
-                        
-                if not wifi_verified:
-                    return False, "Connected to unauthorized WiFi network"
+            # Signal strength validation (if provided natively)
+            if wifi_rssi is not None and wifi_rssi < -80:
+                return False, f"WiFi Signal too weak ({wifi_rssi} dBm). Please move closer to the classroom router."
+
+            # If using hotspot_only, session must allow it
+            if hotspot_only and not session.get("allow_faculty_hotspot"):
+                return False, "Hotspot attendance marking is not enabled for this session."
+
+            # Check WiFi connection
+            if session.get("allow_faculty_hotspot") and hotspot_only:
+                faculty = await self.db["faculty"].find_one({"_id": ObjectId(session["faculty_id"])})
+                if not faculty or not faculty.get("hotspot_bssid"):
+                    return False, "Teacher has not configured their hotspot BSSID."
+                    
+                if faculty["hotspot_bssid"] != wifi_bssid:
+                    return False, f"Connected to unauthorized network. Please connect to the teacher's hotspot: {faculty.get('hotspot_ssid', 'Unknown')}"
+            else:
+                is_approved, _ = await self.wifi_validation.verify_wifi_bssid(wifi_bssid)
+                if not is_approved:
+                    # Optional fallback: If session allows hotspot and they accidentally used normal marking while on hotspot
+                    if session.get("allow_faculty_hotspot"):
+                        faculty = await self.db["faculty"].find_one({"_id": ObjectId(session["faculty_id"])})
+                        if faculty and faculty.get("hotspot_bssid") == wifi_bssid:
+                            pass # Allowed
+                        else:
+                            return False, "Connected to unauthorized WiFi. Please connect to College WiFi or Teacher Hotspot."
+                    else:
+                        return False, "Connected to unauthorized WiFi. Please connect to College WiFi."
             
             # Check if within marking window
             if session["actual_start_time"]:
@@ -337,6 +357,7 @@ class AttendanceService:
                 "marking_time": datetime.utcnow(),
                 "status": status,
                 "wifi_bssid": wifi_bssid,
+                "wifi_rssi": wifi_rssi,
                 "face_confidence": face_confidence,
                 "verified": True,
                 "created_at": datetime.utcnow(),

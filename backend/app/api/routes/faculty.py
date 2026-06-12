@@ -67,6 +67,39 @@ async def create_attendance_session(
         )
 
 
+@router.get("/list", response_model=List[Dict[str, Any]])
+async def list_faculty_users(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database)
+):
+    """List all faculty members (Admin and Advisor accessible)"""
+    try:
+        if current_user.get("role") not in [RoleEnum.ADMIN, RoleEnum.ADVISOR, RoleEnum.FACULTY]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+
+        # Get all users with role=faculty
+        users = await db["users"].find({"role": RoleEnum.FACULTY}).to_list(None)
+        result = []
+        for u in users:
+            u["id"] = str(u["_id"])
+            u["_id"] = str(u["_id"])
+            u.pop("password_hash", None)
+            result.append(u)
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"List faculty error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve faculty list"
+        )
+
+
 class HotspotPermissionUpdate(BaseModel):
     allow_faculty_hotspot: bool
 

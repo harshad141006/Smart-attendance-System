@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Box, Card, CardContent, Typography, Grid, Button, CircularProgress, List, ListItem, ListItemText, Divider, Alert, Chip, TextField } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks';
-import { facultyService } from '../../services';
-import { Assignment, People, BarChart, Add, Wifi } from '@mui/icons-material';
+import { facultyService, timetableService } from '../../services';
+import { Assignment, People, BarChart, Add, Wifi, AccessTime, School, PlayCircleOutline } from '@mui/icons-material';
 
 const FacultyDashboard = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [sessions, setSessions] = useState([]);
+  const [todayPeriods, setTodayPeriods] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -22,11 +23,18 @@ const FacultyDashboard = () => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        const res = await facultyService.getSessions();
-        setSessions(res.data.sessions || []);
+        const [sessionRes, ttRes] = await Promise.all([
+          facultyService.getSessions(),
+          timetableService.getFacultyTimetable()
+        ]);
+        setSessions(sessionRes.data.sessions || []);
+        
+        // Simple logic to show periods (for demo, showing all assigned)
+        // In real app, filter by actual today's day_of_week
+        setTodayPeriods(ttRes.data || []);
       } catch (err) {
         console.error(err);
-        setErrorMsg('Failed to load sessions data.');
+        setErrorMsg('Failed to load dashboard data.');
       } finally {
         setLoading(false);
       }
@@ -147,6 +155,55 @@ const FacultyDashboard = () => {
           </Card>
         </Grid>
       </Grid>
+
+      {/* My Schedule Today */}
+      <Card sx={{ mb: 4, borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.04)' }}>
+        <CardContent sx={{ p: 4 }}>
+          <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 3, display: 'flex', alignItems: 'center' }}>
+            <School sx={{ mr: 1, color: 'primary.main' }} />
+            My Schedule Today
+          </Typography>
+          
+          {todayPeriods.length === 0 ? (
+            <Alert severity="info" sx={{ borderRadius: '12px' }}>
+              You have no academic periods scheduled for today.
+            </Alert>
+          ) : (
+            <Grid container spacing={3}>
+              {todayPeriods.map((p, idx) => (
+                <Grid item xs={12} md={6} key={idx}>
+                  <Card variant="outlined" sx={{ borderRadius: '12px', borderLeft: '4px solid #667eea' }}>
+                    <CardContent>
+                      <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                        <Box>
+                          <Typography variant="subtitle1" fontWeight="bold">
+                            {p.title || `Lecture ${idx + 1}`}
+                          </Typography>
+                          <Typography variant="body2" color="textSecondary" sx={{ mb: 0.5 }}>
+                            {p.subject_name} ({p.batch} - {p.department} - {p.section})
+                          </Typography>
+                          <Typography variant="body2" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontWeight: 'bold' }}>
+                            <AccessTime fontSize="small" /> {p.start_time} - {p.end_time}
+                          </Typography>
+                        </Box>
+                        <Button 
+                          variant="contained" 
+                          size="small" 
+                          startIcon={<PlayCircleOutline />}
+                          onClick={() => navigate('/faculty/create-session', { state: { prefill: p } })}
+                          sx={{ textTransform: 'none', borderRadius: '8px' }}
+                        >
+                          Start
+                        </Button>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          )}
+        </CardContent>
+      </Card>
 
       {/* My Hotspot Configuration */}
       <Card sx={{ mb: 4, borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.04)', overflow: 'hidden' }}>

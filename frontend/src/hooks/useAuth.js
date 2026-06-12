@@ -27,7 +27,7 @@ export const useAuth = () => {
     }
   };
 
-  const register = async (email, password, firstName, lastName, role, hotspotSsid = null, hotspotBssid = null) => {
+  const register = async (email, password, firstName, lastName, role, hotspotSsid = null, hotspotBssid = null, assignedSubjects = []) => {
     dispatch(setLoading(true));
     try {
       await authService.register({
@@ -38,6 +38,7 @@ export const useAuth = () => {
         role,
         hotspot_ssid: hotspotSsid,
         hotspot_bssid: hotspotBssid,
+        assigned_subjects: assignedSubjects,
       });
       dispatch(setError(null));
       return true;
