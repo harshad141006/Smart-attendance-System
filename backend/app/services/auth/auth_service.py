@@ -23,7 +23,8 @@ class AuthService:
         last_name: str,
         role: RoleEnum,
         hotspot_ssid: Optional[str] = None,
-        hotspot_bssid: Optional[str] = None
+        hotspot_bssid: Optional[str] = None,
+        assigned_subjects: Optional[list] = None
     ) -> Optional[str]:
         """Register a new user"""
         try:
@@ -49,6 +50,11 @@ class AuthService:
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
             }
+            
+            if role == RoleEnum.ADVISOR:
+                user_doc["assigned_batch"] = "2026"
+                user_doc["assigned_department"] = "Computer Science"
+                user_doc["assigned_section"] = "A"
             
             result = await self.db["users"].insert_one(user_doc)
             user_id = str(result.inserted_id)
@@ -83,6 +89,23 @@ class AuthService:
                 }
                 await self.db["faculty"].insert_one(faculty_doc)
                 logger.info(f"Auto-created faculty profile for user: {user_id}")
+                
+                if role == RoleEnum.FACULTY and assigned_subjects:
+                    # Update each subject to link to this faculty_id
+                    # The subjects expect `faculty_id` to refer to the faculty user's user_id or faculty doc id.
+                    # In our schema, subjects.faculty_id references the User ID (or faculty doc id).
+                    # Wait, looking at CreateSession, faculty_id is often the user_id or faculty._id.
+                    # Let's set it to user_id for simplicity, as it's the most common linking key in this app.
+                    from bson import ObjectId
+                    for sub_id in assigned_subjects:
+                        try:
+                            await self.db["subjects"].update_one(
+                                {"_id": ObjectId(sub_id)},
+                                {"$set": {"faculty_id": user_id, "updated_at": datetime.utcnow()}}
+                            )
+                        except Exception as ex:
+                            logger.error(f"Failed to assign subject {sub_id} to faculty {user_id}: {ex}")
+                
                 
             logger.info(f"Registered new user: {email}")
             return user_id
@@ -119,6 +142,18 @@ class AuthService:
                 "is_active": user["is_active"]
             }
             
+            if user.get("role") == RoleEnum.ADVISOR:
+                user_data["assigned_batch"] = user.get("assigned_batch", "2026")
+                user_data["assigned_department"] = user.get("assigned_department", "Computer Science")
+                user_data["assigned_section"] = user.get("assigned_section", "A")
+            else:
+                if "assigned_batch" in user:
+                    user_data["assigned_batch"] = user["assigned_batch"]
+                if "assigned_department" in user:
+                    user_data["assigned_department"] = user["assigned_department"]
+                if "assigned_section" in user:
+                    user_data["assigned_section"] = user["assigned_section"]
+            
             return user_data
         except Exception as e:
             logger.error(f"Failed to authenticate user: {e}")
@@ -131,6 +166,10 @@ class AuthService:
             if user:
                 user["id"] = str(user["_id"])
                 del user["password_hash"]
+                if user.get("role") == RoleEnum.ADVISOR:
+                    user.setdefault("assigned_batch", "2026")
+                    user.setdefault("assigned_department", "Computer Science")
+                    user.setdefault("assigned_section", "A")
             return user
         except Exception as e:
             logger.error(f"Failed to get user: {e}")
