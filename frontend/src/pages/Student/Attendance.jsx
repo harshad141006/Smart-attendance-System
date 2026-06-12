@@ -238,7 +238,7 @@ const StudentAttendance = () => {
     setSuccessMsg('');
 
     try {
-      let finalBssid = session.hotspot_bssid || wifiBssid;
+      let finalBssid = wifiBssid;
       let finalRssi = null;
 
       if (Capacitor.isNativePlatform()) {
@@ -332,6 +332,40 @@ const StudentAttendance = () => {
 
       {successMsg && <Alert severity="success" sx={{ mb: 3, borderRadius: '12px' }}>{successMsg}</Alert>}
       {errorMsg && <Alert severity="error" sx={{ mb: 3, borderRadius: '12px' }}>{errorMsg}</Alert>}
+
+      {!Capacitor.isNativePlatform() && (
+        <Card sx={{ mb: 4, borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0', bgcolor: '#f8fafc' }}>
+          <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ p: 1.5, bgcolor: '#fff', borderRadius: '50%', display: 'flex', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+              <Wifi sx={{ color: 'primary.main' }} />
+            </Box>
+            <Box sx={{ flexGrow: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>Web Testing: Mock Wi-Fi Network</Typography>
+              <Typography variant="caption" color="textSecondary" sx={{ mb: 1, display: 'block' }}>
+                Select the network your browser will pretend to be connected to during attendance marking.
+              </Typography>
+              <TextField
+                select
+                value={wifiBssid}
+                onChange={(e) => setWifiBssid(e.target.value)}
+                variant="outlined"
+                size="small"
+                fullWidth
+                sx={{ bgcolor: '#fff' }}
+              >
+                <MenuItem value="AA:BB:CC:DD:EE:FF">College Default (AA:BB:CC:DD:EE:FF)</MenuItem>
+                {activeSessions.filter(s => s.hotspot_bssid).map(session => (
+                  <MenuItem key={`hotspot-${session.id}`} value={session.hotspot_bssid}>
+                    Teacher Hotspot: {session.hotspot_ssid} ({session.subject_code})
+                  </MenuItem>
+                ))}
+                <MenuItem value="BB:BB:BB:BB:BB:BB">Mock Faculty Hotspot (BB:BB:BB:BB:BB:BB)</MenuItem>
+                <MenuItem value="99:99:99:99:99:99">Unauthorized WiFi Network</MenuItem>
+              </TextField>
+            </Box>
+          </Box>
+        </Card>
+      )}
 
       {/* Today's Timetable Section */}
       <Card sx={{ mb: 4, borderRadius: '16px', boxShadow: '0 8px 16px rgba(0,0,0,0.04)' }}>
@@ -617,43 +651,7 @@ const StudentAttendance = () => {
                 </Box>
               </Box>
 
-              {/* Wifi Config selector */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                <Box sx={{ p: 1, bgcolor: isMobile ? 'rgba(0,0,0,0.3)' : '#fff', borderRadius: '50%', display: 'flex' }}>
-                  <Wifi sx={{ color: isMobile ? '#60a5fa' : 'primary.main' }} />
-                </Box>
-                <Box sx={{ flexGrow: 1 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 'bold' }}>WiFi BSSID Network</Typography>
-                  {Capacitor.isNativePlatform() ? (
-                    <Typography variant="caption" sx={{ color: isMobile ? '#4ade80' : 'success.main' }}>
-                      Auto-detecting from native device...
-                    </Typography>
-                  ) : (
-                    <TextField
-                      select
-                      value={wifiBssid}
-                      onChange={(e) => setWifiBssid(e.target.value)}
-                      variant="standard"
-                      fullWidth
-                      InputProps={{ style: { fontSize: '0.8rem', color: isMobile ? '#fff' : 'inherit' } }}
-                      sx={{
-                        '& .MuiSelect-icon': { color: isMobile ? '#fff' : 'inherit' },
-                        '& .MuiInput-underline:before': { borderBottomColor: isMobile ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.42)' },
-                        '& .MuiInput-underline:hover:not(.Mui-disabled):before': { borderBottomColor: isMobile ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.87)' },
-                      }}
-                    >
-                      {selectedSession?.hotspot_bssid ? (
-                        <MenuItem value={selectedSession.hotspot_bssid}>
-                          Teacher Hotspot: {selectedSession.hotspot_ssid}
-                        </MenuItem>
-                      ) : (
-                        <MenuItem value="" disabled>Teacher Hotspot Not Configured</MenuItem>
-                      )}
-                      <MenuItem value="99:99:99:99:99:99">Unauthorized WiFi Network</MenuItem>
-                    </TextField>
-                  )}
-                </Box>
-              </Box>
+              {/* Removed Wifi Config selector since it is now global */}
             </Box>
           </Box>
         </DialogContent>
