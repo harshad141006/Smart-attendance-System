@@ -140,30 +140,11 @@ export function useFaceValidator(videoRef, overlayCanvasRef, stream) {
     // Determine color and message based only on face count
     let color, message, status;
     if (count === 0) {
-      color = '#ef4444'; message = 'Position your face inside the frame.'; status = 'no_face';
+      color = '#ef4444'; message = 'No face detected.'; status = 'no_face';
     } else if (count > 1) {
       color = '#ef4444'; message = 'Only one person should be visible.'; status = 'multiple';
     } else {
       color = '#22c55e'; message = 'Face detected ✅'; status = 'ready';
-      
-      // Provide guidance without changing status='ready'
-      if (fd && fd.bbox) {
-        const [x1, y1, x2, y2] = fd.bbox;
-        const faceArea = (x2 - x1) * (y2 - y1);
-        const viewportArea = vw * vh;
-        const sizeRatio = faceArea / viewportArea;
-        
-        if (sizeRatio < 0.15) {
-          message = 'Move closer';
-        } else if (sizeRatio > 0.70) {
-          message = 'Move farther';
-        } else if (fd.landmarks) {
-          const { yaw, pitch } = estimatePose(fd.landmarks);
-          if (Math.abs(yaw) > 20 || Math.abs(pitch) > 20) {
-            message = 'Look at the camera';
-          }
-        }
-      }
     }
 
     const ctx = overlayCanvas.getContext('2d');
