@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks';
 
 export const ProtectedRoute = ({ children, requiredRole }) => {
@@ -10,17 +10,19 @@ export const ProtectedRoute = ({ children, requiredRole }) => {
   }
 
   if (requiredRole && user?.role !== requiredRole) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={`/${user?.role}/dashboard`} replace />;
   }
 
-  return children;
+  // Support both wrapper usage (<ProtectedRoute><Component/></ProtectedRoute>)
+  // and layout route usage (<Route element={<ProtectedRoute><Layout/></ProtectedRoute>}>)
+  return children ?? <Outlet />;
 };
 
 export const PublicRoute = ({ children }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
 
-  if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+  if (isAuthenticated && user?.role) {
+    return <Navigate to={`/${user.role}/dashboard`} replace />;
   }
 
   return children;

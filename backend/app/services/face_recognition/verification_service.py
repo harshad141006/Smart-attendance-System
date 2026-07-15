@@ -2,6 +2,7 @@ import numpy as np
 from typing import Tuple
 import logging
 from app.core.config import settings
+from app.services.face_recognition.utils import cosine_similarity, similarity_to_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +26,7 @@ class FaceVerificationService:
             Similarity score between 0 and 1
         """
         try:
-            # Normalize embeddings
-            emb1 = embedding1 / (np.linalg.norm(embedding1) + 1e-8)
-            emb2 = embedding2 / (np.linalg.norm(embedding2) + 1e-8)
-            
-            # Calculate cosine similarity
-            similarity = np.dot(emb1, emb2)
+            similarity = cosine_similarity(embedding1, embedding2)
             
             logger.debug(f"Calculated similarity: {similarity:.4f}")
             return float(similarity)
@@ -38,23 +34,43 @@ class FaceVerificationService:
             logger.error(f"Failed to calculate similarity: {e}")
             raise
 
-    def verify_face(self, registered_embedding: np.ndarray, current_embedding: np.ndarray) -> Tuple[bool, float]:
+    def verify_face(self, registered_embeddings: list, current_embedding: np.ndarray) -> Tuple[bool, float, float]:
         """
-        Verify if two embeddings belong to the same person
+        Verify if current embedding matches any of the stored embeddings (1:N)
         
         Args:
-            registered_embedding: Stored face embedding
+            registered_embeddings: List of stored face embeddings (or a single embedding for backwards compatibility)
             current_embedding: Current face embedding to verify
         
         Returns:
-            Tuple of (is_verified: bool, similarity_score: float)
+            Tuple of (is_verified: bool, max_similarity_score: float, max_confidence: float)
         """
         try:
-            similarity = self.calculate_similarity(registered_embedding, current_embedding)
-            is_verified = similarity >= self.threshold
+            if not isinstance(registered_embeddings, list):
+                # Backwards compatibility for single embedding
+                registered_embeddings = [registered_embeddings]
+                
+            max_sim = -1.0
             
-            logger.info(f"Face verification result - Verified: {is_verified}, Similarity: {similarity:.4f}")
-            return is_verified, similarity
+            for reg_emb in registered_embeddings:
+                # Ensure it's a numpy array
+                if not isinstance(reg_emb, np.ndarray):
+                    reg_emb = np.array(reg_emb, dtype=np.float32)
+                    
+                similarity = self.calculate_similarity(reg_emb, current_embedding)
+                if similarity > max_sim:
+                    max_sim = similarity
+                    
+            is_verified = max_sim >= self.threshold
+            confidence = similarity_to_confidence(max_sim, self.threshold)
+            
+            logger.info(
+                "Face verification result - Verified: %s, Max Similarity: %.4f, Max Confidence: %.4f",
+                is_verified,
+                max_sim,
+                confidence,
+            )
+            return is_verified, max_sim, confidence
         except Exception as e:
             logger.error(f"Failed to verify face: {e}")
             raise

@@ -17,28 +17,29 @@ class FaceRegistrationService:
         self.db = db
         self.embedding_service = embedding_service
 
-    async def register_student_face(self, student_id: str, embedding: np.ndarray, confidence_score: float, image_metadata: Optional[dict] = None) -> str:
+    async def register_student_face(self, student_id: str, embeddings: list, confidence_score: float, image_metadata: Optional[dict] = None) -> str:
         """
-        Register a student's face embedding
+        Register a student's face embeddings (multi-frame enrollment)
         
         Args:
             student_id: Student ID
-            embedding: Face embedding (512-dimensional)
+            embeddings: List of Face embeddings (each 512-dimensional)
             confidence_score: Confidence score of face detection
             image_metadata: Optional metadata about the image (without storing raw image)
         
         Returns:
-            ID of the registered embedding
+            ID of the registered embedding document
         """
         try:
             # Verify embedding dimension
-            if not self.embedding_service.verify_embedding_dimension(embedding):
-                raise ValueError(f"Invalid embedding dimension. Expected {settings.face_embedding_dimension}, got {len(embedding)}")
+            if not all(self.embedding_service.verify_embedding_dimension(emb) for emb in embeddings):
+                raise ValueError(f"Invalid embedding dimension. Expected {settings.face_embedding_dimension}")
             
             # Prepare document
             face_embedding_doc = {
                 "student_id": student_id,
-                "embedding": embedding.tolist(),  # Convert numpy array to list for MongoDB
+                "embeddings": [emb.tolist() for emb in embeddings],  # Store as a list of lists
+                "embedding_version": 2, # Flag this as a multi-embedding v2 record
                 "image_metadata": image_metadata or {},
                 "confidence_score": float(confidence_score),
                 "registered_at": datetime.utcnow(),
@@ -49,7 +50,7 @@ class FaceRegistrationService:
             result = await self.db["face_embeddings"].insert_one(face_embedding_doc)
             embedding_id = str(result.inserted_id)
             
-            logger.info(f"Registered face for student {student_id} with embedding ID {embedding_id}")
+            logger.info(f"Registered {len(embeddings)} face embeddings for student {student_id} with embedding ID {embedding_id}")
             return embedding_id
         except Exception as e:
             logger.error(f"Failed to register face: {e}")

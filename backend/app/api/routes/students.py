@@ -1,18 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from motor.motor_asyncio import AsyncIOMotorDatabase as AsyncDatabase
 from typing import Dict, Any, List, Optional
-from bson import ObjectId
 from datetime import datetime
-import torch
 import numpy as np
 from pydantic import BaseModel
+from time import perf_counter
 from app.core.database import get_database
 from app.api.routes.auth import get_current_user
-from app.services.auth.auth_service import AuthService
-from app.services.attendance.attendance_service import AttendanceService
 from app.services.attendance.attendance_service import AttendanceService
 from app.schemas.schemas import RoleEnum, AnnouncementResponse
 import logging
+from app.services.face_recognition.embedding_service import FaceEmbeddingService
+from app.services.face_recognition.registration_service import FaceRegistrationService
+from app.services.face_recognition.verification_service import FaceVerificationService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/students", tags=["Students"])
@@ -57,34 +57,78 @@ async def register_face(
                 detail="Student record not found"
             )
         
-        from app.services.face_recognition.embedding_service import FaceEmbeddingService
-        from app.services.face_recognition.registration_service import FaceRegistrationService
-        
         embedding_service = FaceEmbeddingService()
         registration_service = FaceRegistrationService(db, embedding_service)
         
-        # Preprocess each image into a tensor
-        tensors = []
+        # We need the FaceQualityService (which is now simplified) to check bounds and face count
+        from services.face_recognition.quality import FaceQualityService
+        quality_service = FaceQualityService()
+
+        embeddings = []
+        detection_scores = []
+        
         for img_data in payload.image_data:
-            tensor = embedding_service.preprocess_image(img_data, strict_detection=True)
-            if tensor is None:
+            image_bgr = embedding_service.preprocess_image(img_data)
+            if image_bgr is None:
+                continue
+                
+            faces = embedding_service.get_faces(image_bgr)
+            qr = quality_service.validate(image_bgr, faces)
+            if not qr["ok"]:
+                # The user wants to reject if ANY of the checks fail during registration
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="One or more images failed to process or contain no face"
+                    detail=f"Registration failed: {qr['message']}"
                 )
-            tensors.append(tensor)
-        # Stack tensors into a batch (shape: N, C, H, W)
-        batch_tensor = torch.cat(tensors, dim=0)
-        # Extract batch embeddings
-        batch_embeddings = embedding_service.extract_batch_embeddings(batch_tensor)
-        # Average embeddings (axis 0) to get a single 512-d vector
-        averaged_embedding = np.mean(batch_embeddings, axis=0)
-        # Register the averaged embedding
+                
+            face = faces[0]
+            from services.face_recognition.utils import l2_normalize
+            emb = l2_normalize(np.asarray(face.embedding, dtype=np.float32))
+            embeddings.append(emb)
+            detection_scores.append(float(face.det_score))
+
+        if not embeddings:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No faces detected in any of the provided images"
+            )
+
+        candidate_embeddings = []
+        for emb, score in zip(embeddings, detection_scores):
+             candidate_embeddings.append((emb, score))
+        
+        # Sort by detection score descending
+        candidate_embeddings.sort(key=lambda x: x[1], reverse=True)
+        
+        from app.services.face_recognition.utils import cosine_similarity
+        
+        selected_embs = []
+        for emb, score in candidate_embeddings:
+            if len(selected_embs) >= 10:
+                break
+            
+            # Check diversity
+            is_diverse = True
+            for sel_emb in selected_embs:
+                sim = cosine_similarity(emb, sel_emb)
+                if sim > 0.98: # Too similar
+                    is_diverse = False
+                    break
+                    
+            if is_diverse or len(selected_embs) < 2:
+                selected_embs.append(emb)
+
         embedding_id = await registration_service.register_student_face(
             student_id=str(student["_id"]),
-            embedding=averaged_embedding,
-            confidence_score=1.0,
-            image_metadata={"format": "base64_processed_batch"}
+            embeddings=selected_embs,
+            confidence_score=float(np.mean([score for emb, score in candidate_embeddings]) if candidate_embeddings else 0.0),
+            image_metadata={
+                "engine": "insightface_arcface",
+                "detector": "scrfd",
+                "samples_received": len(payload.image_data),
+                "samples_stored": len(selected_embs),
+                "format": "base64_processed_batch",
+            },
         )
 
         # Invalidate student embedding cache
@@ -92,7 +136,7 @@ async def register_face(
         await cache.delete(f"student:embeddings:{student['_id']}")
 
         return {
-            "message": "Face registered successfully (averaged)",
+            "message": f"Face registered successfully ({len(selected_embs)} embeddings)",
             "embedding_id": embedding_id
         }
     except HTTPException:
@@ -208,14 +252,10 @@ async def mark_attendance(
         
         # Verify face if not hotspot only
         if not payload.hotspot_only:
-            from app.services.face_recognition.registration_service import FaceRegistrationService
-            from app.services.face_recognition.verification_service import FaceVerificationService
-            from app.services.face_recognition.embedding_service import FaceEmbeddingService
-            import numpy as np
-            
             embedding_service = FaceEmbeddingService()
             registration_service = FaceRegistrationService(db, embedding_service)
             verification_service = FaceVerificationService()
+            recognition_started = perf_counter()
             
             registered_emb = await registration_service.get_latest_embedding(str(student["_id"]))
             if not registered_emb:
@@ -230,27 +270,36 @@ async def mark_attendance(
                     detail="Image data is required for face verification."
                 )
             
-            # Preprocess and extract current embedding
-            face_tensor = embedding_service.preprocess_image(payload.image_data, strict_detection=True)
-            if face_tensor is None:
+            # SCRFD detect + ArcFace extract
+            current_result = embedding_service.extract_embedding_from_base64(payload.image_data)
+            if current_result is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="No face detected or failed to process webcam capture image"
                 )
             
-            current_embedding = embedding_service.extract_embedding(face_tensor)
-            registered_embedding = np.array(registered_emb["embedding"])
+            current_embedding, detection_score = current_result
             
-            is_verified, confidence = verification_service.verify_face(registered_embedding, current_embedding)
+            reg_embs = registered_emb.get("embeddings")
+            if not reg_embs:
+                reg_embs = [registered_emb.get("embedding")]
+            
+            is_verified, similarity, confidence = verification_service.verify_face(reg_embs, current_embedding)
+            recognition_time_ms = round((perf_counter() - recognition_started) * 1000, 2)
             
             if not is_verified:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Face verification failed. Please try again in better lighting."
+                    detail=(
+                        f"Face verification failed (similarity={similarity:.4f}). "
+                        "Please try again in better lighting."
+                    )
                 )
         else:
+            similarity = 1.0
             confidence = 1.0
-            is_verified = False
+            detection_score = 1.0
+            recognition_time_ms = 0.0
         
         # Mark attendance
         attendance_service = AttendanceService(db)
@@ -272,7 +321,11 @@ async def mark_attendance(
         return {
             "message": message,
             "face_verified": True,
-            "confidence": confidence
+            "match_status": "matched",
+            "similarity_score": float(similarity),
+            "confidence": float(confidence),
+            "detection_score": float(detection_score),
+            "recognition_time_ms": recognition_time_ms,
         }
     except HTTPException:
         raise
@@ -371,26 +424,21 @@ async def detect_faces(
     db: AsyncDatabase = Depends(get_database),
 ):
     """Return detection results for a batch of base64 images"""
-    from app.services.face_recognition.embedding_service import FaceEmbeddingService
     detection_service = FaceEmbeddingService()
     results = []
     for idx, img in enumerate(payload.images):
         try:
-            tensor = detection_service.preprocess_image(img, strict_detection=True)
-            detected = tensor is not None
-            results.append({"index": idx, "detected": detected})
+            result = detection_service.extract_embedding_from_base64(img)
+            detected = result is not None
+            det_score = float(result[1]) if result else 0.0
+            results.append({"index": idx, "detected": detected, "detection_score": det_score})
         except Exception as e:
             results.append({"index": idx, "detected": False, "error": str(e)})
     return {"results": results}
 
 import os
 import tempfile
-import base64
-import cv2
 from app.services.face_recognition.video_service import extract_frames
-from app.services.face_recognition.registration_service import FaceRegistrationService
-from app.services.face_recognition.verification_service import FaceVerificationService
-from app.services.face_recognition.embedding_service import FaceEmbeddingService
 
 @router.post("/face-detect/video", response_model=Dict[str, Any])
 async def detect_faces_video(
@@ -429,45 +477,60 @@ async def detect_faces_video(
             except Exception as e:
                 logger.error(f"Failed to delete temp file {tmp_path}: {e}")
 
-    # Run detection on frames
+    # Run SCRFD+ArcFace on frames
     detection_service = FaceEmbeddingService()
     results = []
+    frame_embeddings: Dict[int, np.ndarray] = {}
+    frame_scores: Dict[int, float] = {}
+
     for idx, frame in enumerate(frames):
-        # Encode frame to base64 JPEG for reuse of preprocess_image
-        _, buffer = cv2.imencode('.jpg', frame)
-        b64_str = base64.b64encode(buffer).decode('utf-8')
-        tensor = detection_service.preprocess_image(b64_str, strict_detection=True)
-        detected = tensor is not None
-        results.append({"index": idx, "detected": detected})
+        result = detection_service.extract_embedding_with_score(frame)
+        detected = result is not None
+        det_score = float(result[1]) if result else 0.0
+        if result is not None:
+            frame_embeddings[idx] = result[0]
+            frame_scores[idx] = det_score
+        results.append({"index": idx, "detected": detected, "detection_score": det_score})
 
-    # Choose best frame (first detected)
-    best_idx = next((r["index"] for r in results if r["detected"]), None)
+    # Choose best frame by detection score
+    best_idx = max(frame_scores, key=frame_scores.get) if frame_scores else None
     verified = False
-    if best_idx is not None:
-        # Get embedding for best frame
-        best_frame = frames[best_idx]
-        _, buffer = cv2.imencode('.jpg', best_frame)
-        b64_best = base64.b64encode(buffer).decode('utf-8')
-        best_tensor = detection_service.preprocess_image(b64_best, strict_detection=True)
-        if best_tensor is not None:
-            best_emb = detection_service.extract_embedding(best_tensor)
-            # Retrieve registered embedding
-            student = await db["students"].find_one({"user_id": current_user["id"]})
-            if not student:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Student record not found"
-                )
-            
-            registration_service = FaceRegistrationService(db, detection_service)
-            registered = await registration_service.get_latest_embedding(str(student["_id"]))
-            if registered:
-                reg_emb = np.array(registered["embedding"])
-                verification_service = FaceVerificationService()
-                is_verified, _ = verification_service.verify_face(reg_emb, best_emb)
-                verified = is_verified
+    similarity = 0.0
+    confidence = 0.0
+    recognition_time_ms = 0.0
 
-    return {"results": results, "best_frame_index": best_idx, "verified": verified}
+    if best_idx is not None:
+        recognition_started = perf_counter()
+        best_emb = frame_embeddings[best_idx]
+
+        # Retrieve registered embedding
+        student = await db["students"].find_one({"user_id": current_user["id"]})
+        if not student:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Student record not found"
+            )
+
+        registration_service = FaceRegistrationService(db, detection_service)
+        registered = await registration_service.get_latest_embedding(str(student["_id"]))
+        if registered:
+            reg_embs = registered.get("embeddings")
+            if not reg_embs:
+                reg_embs = [registered.get("embedding")]
+                
+            verification_service = FaceVerificationService()
+            verified, similarity, confidence = verification_service.verify_face(reg_embs, best_emb)
+            recognition_time_ms = round((perf_counter() - recognition_started) * 1000, 2)
+
+    return {
+        "results": results,
+        "best_frame_index": best_idx,
+        "verified": verified,
+        "match_status": "matched" if verified else "not_matched",
+        "similarity_score": float(similarity),
+        "confidence": float(confidence),
+        "recognition_time_ms": recognition_time_ms,
+    }
 
 
 @router.get("/announcements", response_model=List[AnnouncementResponse])
