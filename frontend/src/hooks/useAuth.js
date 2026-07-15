@@ -33,12 +33,10 @@ export const useAuth = () => {
       await authService.register({
         email,
         password,
-        first_name: firstName,
-        last_name: lastName,
+        displayName: `${firstName} ${lastName}`.trim(),
         role,
         hotspot_ssid: hotspotSsid,
         hotspot_bssid: hotspotBssid,
-        assigned_subjects: assignedSubjects,
       });
       dispatch(setError(null));
       return true;

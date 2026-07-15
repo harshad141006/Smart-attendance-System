@@ -27,8 +27,9 @@ class Settings(BaseSettings):
 
     # Face Recognition Configuration
     face_embedding_dimension: int = 512
-    face_similarity_threshold: float = 0.6
-    face_detection_model: str = "hf_hub:gaunernst/vit_small_patch8_gap_112.cosface_ms1mv3"
+    face_similarity_threshold: float = 0.35
+    arcface_model_name: str = "buffalo_l"
+    arcface_det_size: int = 640
 
     # Geofencing Configuration
     college_latitude: float = 28.7041

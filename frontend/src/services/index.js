@@ -17,35 +17,33 @@ export const userService = {
 
 export const studentService = {
   registerFace: (imageDatas) =>
-    api.post('/students/register-face', { image_data: Array.isArray(imageDatas) ? imageDatas : [imageDatas] }),
-  getAttendanceHistory: () => api.get('/students/attendance-history'),
-  getAttendancePercentage: () => api.get('/students/attendance-percentage'),
-  markAttendance: (sessionId, imageData, latitude, longitude, wifiBssid, wifiRssi = null, hotspotOnly = false) =>
-    api.post('/students/mark-attendance', {
-      session_id: sessionId,
-      image_data: imageData,
+    api.post('/attendance/face-register', { image_data: Array.isArray(imageDatas) ? imageDatas : [imageDatas] }),
+  getAttendanceHistory: () => api.get('/attendance/my-records'),
+  getAttendancePercentage: () => api.get('/attendance/stats'),
+  markAttendance: (courseId, latitude = null, longitude = null, faceDistance = null, confidence = null) =>
+    api.post('/attendance/mark', {
+      courseId,
       latitude,
       longitude,
-      wifi_bssid: wifiBssid,
-      wifi_rssi: wifiRssi,
-      hotspot_only: hotspotOnly,
+      faceDistance,
+      confidence,
     }),
   submitODRequest: (sessionId, reason, docUrl = null) =>
-    api.post('/students/od-request', {
+    api.post('/attendance/od-request', {
       session_id: sessionId,
       reason,
       supporting_document_url: docUrl,
     }),
   detectFaceVideo: (videoBlob) => {
     const formData = new FormData();
-    formData.append('file', videoBlob, 'video.mp4');
-    return api.post('/students/face-detect/video', formData, {
+    formData.append('file', videoBlob, 'video.webm');
+    return api.post('/attendance/face-verify/video', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
     });
   },
-  getAnnouncements: () => api.get('/students/announcements'),
+  getAnnouncements: () => api.get('/notifications'),
 };
 
 export const facultyService = {

@@ -1,244 +1,276 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { Box, Card, CardContent, Button, Typography, Alert, CircularProgress, Grid } from '@mui/material';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import {
+  Box, Card, CardContent, Button, Typography,
+  CircularProgress, Grid, LinearProgress, Alert
+} from '@mui/material';
+import { CameraAlt, CheckCircle, FaceRetouchingNatural } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useCamera } from '../../hooks';
+import { useFaceValidator } from '../../hooks/useFaceValidator';
+import { useFaceDetectionPoller } from '../../hooks/useFaceDetectionPoller';
 import { studentService } from '../../services';
-import { CameraAlt, PhotoCamera, CheckCircle } from '@mui/icons-material';
 
-const POSES = [
-  'Look straight (neutral)',
-  'Turn left slightly',
-  'Turn right slightly',
-  'Smile',
-  'Tilt head left',
-  'Tilt head right',
-  'Look up',
-  'Look down'
-];
+const MAX_FRAMES = 30;
+const CAPTURE_INTERVAL_MS = 400;
 
-const FaceRegistration = () => {
+export default function FaceRegistration() {
   const navigate = useNavigate();
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [registered, setRegistered] = useState(false);
-  const [message, setMessage] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [loading, setLoading] = useState(false);
-  
+  const overlayCanvasRef = useRef(null);
+  const captureCanvasRef = useRef(null);
+
+  // Phases: idle | live | auto-capturing | submitting | done | error
+  const [phase, setPhase] = useState('idle');
+  const [serverMsg, setServerMsg] = useState('');
+  const [serverError, setServerError] = useState('');
+
+  // Multi-capture state
   const [capturedImages, setCapturedImages] = useState([]);
-  const [currentPoseIndex, setCurrentPoseIndex] = useState(0);
+  const [captureInstruction, setCaptureInstruction] = useState('Keep looking at the camera');
 
   const { startCamera, stopCamera, stream, error: cameraError } = useCamera();
 
-  // Stop camera on component unmount
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, [stopCamera]);
+  useFaceDetectionPoller(videoRef, captureCanvasRef, stream);
+  const { liveStatus, captureFrame } = useFaceValidator(videoRef, overlayCanvasRef, stream);
 
+  // Sync video srcObject
   useEffect(() => {
     if (stream && videoRef.current && !videoRef.current.srcObject) {
       videoRef.current.srcObject = stream;
     }
   }, [stream]);
 
-  const handleStartCamera = async () => {
-    setErrorMsg('');
-    setMessage('');
+  const handleStart = useCallback(async () => {
+    setServerMsg(''); setServerError('');
     setCapturedImages([]);
-    setCurrentPoseIndex(0);
     const s = await startCamera(videoRef.current);
-    if (s) {
-      setMessage(`Camera initialized. Pose 1/${POSES.length}: ${POSES[0]}`);
+    if (s) setPhase('live');
+  }, [startCamera]);
+
+  const handleStop = useCallback(() => {
+    stopCamera(); setPhase('idle'); setServerError('');
+  }, [stopCamera]);
+
+  useEffect(() => () => stopCamera(), [stopCamera]);
+
+  // Transition from live -> auto-capturing when face is ready
+  useEffect(() => {
+    if (phase === 'live' && liveStatus.status === 'ready') {
+      // Auto-start capturing when one face is detected
+      setPhase('auto-capturing');
     }
-  };
+  }, [phase, liveStatus.status]);
 
-  const handleCapture = async () => {
-    if (!videoRef.current || !stream) {
-      setErrorMsg('Camera stream not active');
-      return;
+  // Auto-capturing loop
+  useEffect(() => {
+    let interval;
+    if (phase === 'auto-capturing') {
+      interval = setInterval(() => {
+        // Pause capturing if no face or multiple faces
+        if (liveStatus.status !== 'ready') return;
+
+        setCapturedImages(prev => {
+          if (prev.length >= MAX_FRAMES) return prev;
+          
+          const frameData = captureFrame();
+          if (frameData && frameData.b64) {
+             return [...prev, frameData.b64];
+          }
+          return prev;
+        });
+      }, CAPTURE_INTERVAL_MS);
     }
+    return () => clearInterval(interval);
+  }, [phase, liveStatus.status, captureFrame]);
 
-    setErrorMsg('');
-    setMessage('');
-
-    try {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const base64Image = canvas.toDataURL('image/jpeg', 0.9);
-      
-      const newCapturedImages = [...capturedImages, base64Image];
-      setCapturedImages(newCapturedImages);
-
-      if (currentPoseIndex < POSES.length - 1) {
-        setCurrentPoseIndex(prev => prev + 1);
-        setMessage(`Pose captured! Next: ${POSES[currentPoseIndex + 1]}`);
+  // Dynamic Instructions & Submission
+  useEffect(() => {
+    if (phase === 'auto-capturing') {
+      const len = capturedImages.length;
+      if (len >= MAX_FRAMES) {
+        setPhase('submitting');
+        studentService.registerFace(capturedImages)
+          .then(res => {
+            const data = res.data;
+            if (data.success === false) {
+              setServerError(data.message || 'Registration failed');
+              setPhase('error');
+            } else {
+              setServerMsg(data.message || 'Face registered successfully');
+              setPhase('done');
+              stopCamera();
+            }
+          })
+          .catch(err => {
+            const d = err.response?.data?.detail;
+            const msg = (typeof d === 'object' ? d?.message : d) || 'Registration failed. Please try again.';
+            setServerError(msg);
+            setPhase('error');
+          });
       } else {
-        // All poses captured, send to backend
-        setLoading(true);
-        setMessage('All poses captured. Registering face model...');
-        const response = await studentService.registerFace(newCapturedImages);
-        
-        setMessage(response.data.message || 'Face registered successfully!');
-        setRegistered(true);
-        stopCamera();
-        setLoading(false);
+        // Provide diverse pose instructions during capture
+        const progress = len / MAX_FRAMES;
+        if (progress < 0.2) setCaptureInstruction('Keep looking straight');
+        else if (progress < 0.4) setCaptureInstruction('Turn slightly Left');
+        else if (progress < 0.6) setCaptureInstruction('Turn slightly Right');
+        else if (progress < 0.8) setCaptureInstruction('Look slightly Up');
+        else setCaptureInstruction('Look slightly Down');
       }
-    } catch (err) {
-      console.error(err);
-      setErrorMsg(err.response?.data?.detail || 'Failed to analyze and register face embedding. Please try again.');
-      setLoading(false);
     }
-  };
+  }, [capturedImages.length, phase, capturedImages, stopCamera]);
+
+  const handleRetryError = useCallback(() => {
+    setServerError('');
+    setCapturedImages([]);
+    setPhase('live');
+  }, []);
+
+  const isLive = phase === 'live';
+  const isAutoCap = phase === 'auto-capturing';
+  const isSubmitting = phase === 'submitting';
+  const isDone = phase === 'done';
+  const isError = phase === 'error';
 
   return (
     <Box>
       <Typography variant="h4" sx={{ mb: 1, fontWeight: 800, background: 'linear-gradient(to right, #667eea, #764ba2)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-        AI Face Registration
+        Automatic Face Registration
       </Typography>
-      <Typography color="textSecondary" variant="subtitle1" sx={{ mb: 4 }}>
-        Securely register your face biometrics. Raw photos are not stored on our servers.
+      <Typography color="textSecondary" variant="subtitle1" sx={{ mb: 3 }}>
+        The system will automatically collect optimal face samples without requiring any button presses.
       </Typography>
 
-      {message && <Alert severity="success" sx={{ mb: 3, borderRadius: '12px' }}>{message}</Alert>}
-      {errorMsg && <Alert severity="error" sx={{ mb: 3, borderRadius: '12px' }}>{errorMsg}</Alert>}
-      {cameraError && <Alert severity="error" sx={{ mb: 3, borderRadius: '12px' }}>Camera Access Error: {cameraError}</Alert>}
+      <Grid container spacing={3} justifyContent="center">
+        <Grid item xs={12} md={7}>
+          <Card sx={{ borderRadius: '16px', boxShadow: '0 8px 24px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+            <CardContent sx={{ p: 3, textAlign: 'center' }}>
 
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6}>
-          <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-            <CardContent sx={{ p: 4, textAlign: 'center' }}>
-              <Box sx={{ position: 'relative', width: '100%', maxWidth: '480px', margin: '0 auto', aspectRatio: '4/3', borderRadius: '12px', bgcolor: '#000', overflow: 'hidden', border: '2px solid #e2e8f0', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                {stream ? (
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <Box sx={{ color: '#a0aec0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                    <PhotoCamera sx={{ fontSize: 48 }} />
-                    <Typography variant="body2">Camera is currently inactive</Typography>
+              {/* Viewport */}
+              <Box sx={{ position: 'relative', width: '100%', maxWidth: 520, margin: '0 auto', aspectRatio: '4/3', borderRadius: '12px', bgcolor: '#0a0a0a', overflow: 'hidden' }}>
+                
+                {/* Live Video */}
+                {(isLive || isAutoCap || isSubmitting || isError || isDone) && stream ? (
+                  <video ref={videoRef} autoPlay playsInline muted
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                ) : null}
+
+                {/* Idle / No Camera */}
+                {!stream && (
+                  <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#555', gap: 2 }}>
+                    <FaceRetouchingNatural sx={{ fontSize: 64 }} />
+                    <Typography variant="body2">Camera inactive</Typography>
                   </Box>
                 )}
-                
-                {/* Visual Face Oval Overlay */}
-                {stream && (
-                  <Box sx={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    width: '60%',
-                    height: '75%',
-                    border: '3px dashed #667eea',
-                    borderRadius: '50%',
-                    pointerEvents: 'none',
-                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4)'
-                  }} />
+
+                {/* Live Overlay */}
+                <canvas ref={overlayCanvasRef}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', display: (isLive || isAutoCap) ? 'block' : 'none' }} />
+
+                {/* Auto Capturing Overlay */}
+                {isAutoCap && (
+                  <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0, bgcolor: 'rgba(0,0,0,0.7)', p: 2, color: 'white' }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>{captureInstruction}</Typography>
+                    <LinearProgress variant="determinate" value={(capturedImages.length / MAX_FRAMES) * 100} sx={{ height: 10, borderRadius: 5 }} />
+                    <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+                      Collected {capturedImages.length} of {MAX_FRAMES} samples
+                    </Typography>
+                  </Box>
+                )}
+
+                {/* Submitting overlay */}
+                {isSubmitting && (
+                  <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(0,0,0,0.7)', gap: 2 }}>
+                    <CircularProgress size={52} sx={{ color: '#22c55e' }} />
+                    <Typography sx={{ color: '#fff', fontWeight: 700 }}>Processing multiple face samples...</Typography>
+                  </Box>
                 )}
               </Box>
 
-              {/* Hidden canvas for grabbing frames */}
-              <canvas ref={canvasRef} style={{ display: 'none' }} />
+              {/* Hidden canvas for poller */}
+              <canvas ref={captureCanvasRef} style={{ display: 'none' }} />
 
-              <Box sx={{ mt: 4, display: 'flex', justifyContent: 'center', gap: 2 }}>
-                {!stream ? (
-                  <Button
-                    variant="contained"
-                    startIcon={<CameraAlt />}
-                    onClick={handleStartCamera}
-                    sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 'bold', px: 3, py: 1.2 }}
-                  >
-                    Start Camera
+              {/* Live Status Messaging */}
+              {(isLive || isAutoCap) && (
+                <Box sx={{ mt: 2.5 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 700, color: liveStatus.color, transition: 'color 0.3s ease' }}>
+                    {liveStatus.message || 'Position your face inside the frame.'}
+                  </Typography>
+                </Box>
+              )}
+
+              {/* Success */}
+              {isDone && (
+                <Box sx={{ mt: 2.5, p: 2.5, borderRadius: '12px', bgcolor: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.22)', textAlign: 'center' }}>
+                  <CheckCircle sx={{ color: '#22c55e', fontSize: 48, mb: 1 }} />
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#22c55e' }}>{serverMsg}</Typography>
+                  <Box sx={{ mt: 2 }}>
+                    <Button variant="contained" size="small" onClick={() => navigate('/student/dashboard')}
+                      sx={{ borderRadius: '8px', textTransform: 'none' }}>
+                      Go to Dashboard
+                    </Button>
+                  </Box>
+                </Box>
+              )}
+
+              {/* Error */}
+              {isError && (
+                <Box sx={{ mt: 2, p: 2, borderRadius: '12px', bgcolor: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.22)' }}>
+                  <Typography variant="body2" sx={{ color: '#ef4444', fontWeight: 600, mb: 1.5 }}>{serverError}</Typography>
+                  <Button variant="outlined" color="error" size="small" onClick={handleRetryError}
+                    sx={{ borderRadius: '8px', textTransform: 'none' }}>
+                    Retry Enrollment
                   </Button>
-                ) : (
-                  <>
-                    <Button
-                      variant="outlined"
-                      color="error"
-                      onClick={() => stopCamera()}
-                      sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 'bold', px: 3 }}
-                    >
-                      Stop Camera
-                    </Button>
-                    <Button
-                      variant="contained"
-                      color="success"
-                      startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <PhotoCamera />}
-                      onClick={handleCapture}
-                      disabled={loading}
-                      sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 'bold', px: 3, py: 1.2 }}
-                    >
-                      {loading ? 'Processing...' : 'Capture & Register'}
-                    </Button>
-                  </>
+                </Box>
+              )}
+
+              {cameraError && (
+                <Typography variant="body2" sx={{ mt: 2, color: '#ef4444' }}>Camera error: {cameraError}</Typography>
+              )}
+
+              {/* Controls */}
+              <Box sx={{ mt: 3, display: 'flex', justifyContent: 'center', gap: 2 }}>
+                {!stream && !isDone && (
+                  <Button variant="contained" startIcon={<CameraAlt />} onClick={handleStart}
+                    sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 700, px: 3, py: 1.2, background: 'linear-gradient(135deg, #667eea, #764ba2)' }}>
+                    Start Registration
+                  </Button>
+                )}
+                {stream && !isSubmitting && (
+                  <Button variant="outlined" color="error" onClick={handleStop}
+                    sx={{ borderRadius: '10px', textTransform: 'none', fontWeight: 700 }}>
+                    Cancel
+                  </Button>
                 )}
               </Box>
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={6}>
-          <Card sx={{ borderRadius: '16px', boxShadow: '0 10px 20px rgba(0,0,0,0.05)', height: '100%' }}>
-            <CardContent sx={{ p: 4 }}>
-              <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 3 }}>
-                Verification Guidelines
-              </Typography>
-              
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
-                  <CheckCircle sx={{ color: 'success.main', mr: 2, mt: 0.5 }} />
-                  <Box>
-                    <Typography variant="body1" sx={{ fontWeight: 'bold' }}>Lighting Condition</Typography>
-                    <Typography variant="body2" color="textSecondary">Ensure you are in a well-lit room. Avoid backlighting or strong direct sun on the camera lens.</Typography>
+        {/* Tips panel */}
+        <Grid item xs={12} md={5}>
+          <Card sx={{ borderRadius: '16px', boxShadow: '0 8px 24px rgba(0,0,0,0.07)', height: '100%' }}>
+            <CardContent sx={{ p: 3 }}>
+              <Typography variant="h6" sx={{ fontWeight: 700, mb: 2.5 }}>Registration Tips</Typography>
+              <Alert severity="info" sx={{ mb: 3, borderRadius: '12px' }}>
+                You do not need to press any capture button. Just move your head as instructed.
+              </Alert>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {[
+                  { icon: '🔄', tip: 'Slowly follow the on-screen instructions (turn left/right/up/down).' },
+                  { icon: '💡', tip: 'Ensure your face is well lit.' },
+                  { icon: '🧍', tip: 'Ensure no one else is in the frame.' },
+                  { icon: '🚫', tip: 'Remove glasses, masks, or hats if possible.' },
+                ].map(({ icon, tip }) => (
+                  <Box key={tip} sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+                    <Typography sx={{ fontSize: '1.3rem' }}>{icon}</Typography>
+                    <Typography variant="body2" color="textSecondary">{tip}</Typography>
                   </Box>
-                </Box>
-
-                <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
-                  <CheckCircle sx={{ color: 'success.main', mr: 2, mt: 0.5 }} />
-                  <Box>
-                    <Typography variant="body1" sx={{ fontWeight: 'bold' }}>Neutral Pose</Typography>
-                    <Typography variant="body2" color="textSecondary">Position your head within the overlay frame. Face directly forward and maintain a neutral expression.</Typography>
-                  </Box>
-                </Box>
-
-                <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
-                  <CheckCircle sx={{ color: 'success.main', mr: 2, mt: 0.5 }} />
-                  <Box>
-                    <Typography variant="body1" sx={{ fontWeight: 'bold' }}>No Obstruction</Typography>
-                    <Typography variant="body2" color="textSecondary">Remove sunglasses, caps, masks or heavy headwear that covers structural facial attributes.</Typography>
-                  </Box>
-                </Box>
+                ))}
               </Box>
-
-              {registered && (
-                <Box sx={{ mt: 5, p: 3, borderRadius: '12px', bgcolor: 'rgba(76, 175, 80, 0.08)', border: '1px solid rgba(76, 175, 80, 0.2)', textAlign: 'center' }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: 'success.main', mb: 1 }}>
-                    Biometric Face ID Active
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-                    Your facial parameters are registered. You can now mark attendance using the mobile verify screen.
-                  </Typography>
-                  <Button variant="contained" size="small" onClick={() => navigate('/student/dashboard')} sx={{ borderRadius: '8px', textTransform: 'none' }}>
-                    Go to Dashboard
-                  </Button>
-                </Box>
-              )}
             </CardContent>
           </Card>
         </Grid>
       </Grid>
     </Box>
   );
-};
-
-export default FaceRegistration;
+}
