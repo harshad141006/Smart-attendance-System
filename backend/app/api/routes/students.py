@@ -100,23 +100,11 @@ async def register_face(
         # Sort by detection score descending
         candidate_embeddings.sort(key=lambda x: x[1], reverse=True)
         
-        from app.services.face_recognition.utils import cosine_similarity
-        
         selected_embs = []
         for emb, score in candidate_embeddings:
             if len(selected_embs) >= 10:
                 break
-            
-            # Check diversity
-            is_diverse = True
-            for sel_emb in selected_embs:
-                sim = cosine_similarity(emb, sel_emb)
-                if sim > 0.98: # Too similar
-                    is_diverse = False
-                    break
-                    
-            if is_diverse or len(selected_embs) < 2:
-                selected_embs.append(emb)
+            selected_embs.append(emb)
 
         embedding_id = await registration_service.register_student_face(
             student_id=str(student["_id"]),
